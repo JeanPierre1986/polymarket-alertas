@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 WALLETS_EXTRA = [w.strip().lower() for w in os.environ.get("WALLETS_EXTRA", "").split(",") if w.strip()]
-TOP_N = int(os.environ.get("TOP_N", "20"))
+TOP_N = int(os.environ.get("TOP_N", "50"))
 LEADERBOARD_WINDOW = os.environ.get("LEADERBOARD_WINDOW", "30d")
 MIN_USD = float(os.environ.get("MIN_USD", "20"))
 WINDOW_MINUTES = int(os.environ.get("WINDOW_MINUTES", "5"))
