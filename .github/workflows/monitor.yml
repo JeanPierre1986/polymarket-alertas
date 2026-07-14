@@ -25,6 +25,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           WALLETS_EXTRA: ${{ secrets.WALLETS_EXTRA }}
           TOP_N: "500"
+          WHALE_USD: "2000"
           LEADERBOARD_WINDOW: "30d"
           MIN_USD: "250"
           WINDOW_MINUTES: "2"
