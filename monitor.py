@@ -1,7 +1,6 @@
 """
-Monitor Polymarket Deportes v3 → Telegram
-Vigila las wallets del TOP 50 del leaderboard y alerta cualquier
-apuesta deportiva que hagan (todos los deportes).
+Monitor Polymarket Deportes v4 → Telegram
+Vigila los TOP 50 traders y alerta apuestas deportivas >= $500.
 """
 
 import os
@@ -21,24 +20,21 @@ WINDOW_MINUTES = int(os.environ.get("WINDOW_MINUTES", "10"))
 LB_API = "https://lb-api.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
 GAMMA_API = "https://gamma-api.polymarket.com"
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; sports-monitor/3.0)"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; sports-monitor/4.0)"}
 
-# Tags de deportes en Polymarket (Gamma API)
 SPORT_TAGS = ["sports", "soccer", "football", "nba", "nfl", "mlb", "nhl",
               "tennis", "ufc", "mma", "boxing", "golf", "f1", "cricket", "esports"]
 
 SPORT_KEYWORDS = [
-    # Fútbol
     "soccer", "premier league", "epl", "la liga", "laliga", "serie a",
     "bundesliga", "ligue 1", "champions league", "ucl", "europa league",
     "world cup", "copa america", "copa libertadores", "fifa", "uefa",
     "mls", "liga mx", "fa cup", "ballon d'or", "golden boot", "top scorer",
-    # Otros deportes
     "nba", "nfl", "mlb", "nhl", "super bowl", "world series", "stanley cup",
     "finals", "playoffs", "grand slam", "wimbledon", "us open", "roland garros",
     "australian open", "ufc", "mma", "boxing", "heavyweight", "grand prix",
     "formula 1", "f1 ", "premier padel", "olympics", "ncaa", "march madness",
-    "masters", "pga", "ryder cup", "cricket", "ipl", "rugby",
+    "masters", "pga", "ryder cup", "cricket", "ipl", "rugby", "atp", "wta",
     " vs ", " vs. ", " @ ",
 ]
 
@@ -74,11 +70,11 @@ def get_top_traders():
     if not data:
         data = safe_get(f"{LB_API}/leaderboard", params={"window": LEADERBOARD_WINDOW, "limit": TOP_N, "rankType": "profit"})
     if isinstance(data, list):
-        for t in data[:TOP_N]:
+        for i, t in enumerate(data[:TOP_N]):
             wallet = (t.get("proxyWallet") or t.get("wallet") or t.get("address") or "").lower()
             name = t.get("name") or t.get("pseudonym") or wallet[:8]
             if wallet:
-                traders[wallet] = name
+                traders[wallet] = (name, i + 1)
     log(f"Leaderboard: {len(traders)} traders obtenidos")
     return traders
 
@@ -164,11 +160,9 @@ def main():
     cutoff_ts = int(time.time()) - WINDOW_MINUTES * 60
 
     traders = get_top_traders()
-    ranks = {w: i + 1 for i, w in enumerate(traders.keys())}
     for w in WALLETS_EXTRA:
         if w not in traders:
-            traders[w] = f"Seguido {w[:8]}"
-            ranks[w] = 0
+            traders[w] = (f"Seguido {w[:8]}", 0)
 
     if not traders:
         log("Sin traders para monitorear.")
@@ -177,7 +171,7 @@ def main():
     sport_slugs, sport_condition_ids = get_sport_market_ids()
 
     alerts, seen = 0, set()
-    for wallet, name in traders.items():
+    for wallet, (name, rank) in traders.items():
         recent = get_recent_trades(wallet, cutoff_ts)
         for trade in recent:
             tx = trade.get("transactionHash") or f"{wallet}-{trade.get('timestamp')}-{trade.get('asset')}"
@@ -193,7 +187,6 @@ def main():
                 continue
 
             trader_name = trade.get("pseudonym") or trade.get("name") or name
-            rank = ranks.get(wallet, 0) or "⭐"
             send_telegram(format_alert(trade, trader_name, wallet, rank))
             alerts += 1
             time.sleep(1)
