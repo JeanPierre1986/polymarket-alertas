@@ -2,13 +2,13 @@ name: Monitor Polymarket Fútbol
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -24,8 +24,8 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           WALLETS_EXTRA: ${{ secrets.WALLETS_EXTRA }}
-          TOP_N: "20"
+          TOP_N: "50"
           LEADERBOARD_WINDOW: "30d"
           MIN_USD: "50"
-          WINDOW_MINUTES: "5"
+          WINDOW_MINUTES: "11"
         run: python monitor.py
