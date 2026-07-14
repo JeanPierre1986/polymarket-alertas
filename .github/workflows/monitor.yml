@@ -2,7 +2,7 @@ name: Monitor Polymarket Deportes
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/3 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -27,5 +27,5 @@ jobs:
           TOP_N: "50"
           LEADERBOARD_WINDOW: "30d"
           MIN_USD: "500"
-          WINDOW_MINUTES: "10"
+          WINDOW_MINUTES: "4"
         run: python monitor.py
