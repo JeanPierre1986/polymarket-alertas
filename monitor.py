@@ -1,6 +1,7 @@
 """
-Monitor de apostadores top de fútbol en Polymarket → alertas por Telegram
-Corre cada 5 min vía GitHub Actions. Solo alerta trades recientes.
+Monitor Polymarket Fútbol v2 → Telegram
+Vigila el feed global de trades: alerta ballenas en fútbol (>= WHALE_USD)
+y trades de top traders del leaderboard (>= MIN_USD).
 """
 
 import os
@@ -12,15 +13,16 @@ from datetime import datetime, timezone
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 WALLETS_EXTRA = [w.strip().lower() for w in os.environ.get("WALLETS_EXTRA", "").split(",") if w.strip()]
-TOP_N = int(os.environ.get("TOP_N", "15"))
+TOP_N = int(os.environ.get("TOP_N", "100"))
 LEADERBOARD_WINDOW = os.environ.get("LEADERBOARD_WINDOW", "30d")
 MIN_USD = float(os.environ.get("MIN_USD", "500"))
+WHALE_USD = float(os.environ.get("WHALE_USD", "2000"))
 WINDOW_MINUTES = int(os.environ.get("WINDOW_MINUTES", "6"))
 
 LB_API = "https://lb-api.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
 GAMMA_API = "https://gamma-api.polymarket.com"
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; futbol-monitor/1.0)"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; futbol-monitor/2.0)"}
 
 SOCCER_KEYWORDS = [
     "soccer", "premier league", "epl", "la liga", "laliga", "serie a",
@@ -36,7 +38,7 @@ def log(msg):
     print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def safe_get(url, params=None, timeout=20):
+def safe_get(url, params=None, timeout=25):
     try:
         r = requests.get(url, params=params, headers=HEADERS, timeout=timeout)
         if r.status_code == 200:
@@ -90,11 +92,21 @@ def is_soccer_trade(trade, soccer_slugs, soccer_condition_ids):
     return any(kw in text for kw in SOCCER_KEYWORDS)
 
 
-def get_recent_trades(wallet, cutoff_ts):
-    trades = safe_get(f"{DATA_API}/trades", params={"user": wallet, "limit": 50})
-    if not isinstance(trades, list):
-        return []
-    return [t for t in trades if int(t.get("timestamp", 0)) >= cutoff_ts]
+def get_global_trades(cutoff_ts):
+    """Feed global de trades recientes de todo Polymarket."""
+    all_trades, offset = [], 0
+    while offset <= 2000:
+        batch = safe_get(f"{DATA_API}/trades", params={"limit": 500, "offset": offset, "takerOnly": "true"})
+        if not isinstance(batch, list) or not batch:
+            break
+        all_trades.extend(batch)
+        oldest = min(int(t.get("timestamp", 0)) for t in batch)
+        if oldest < cutoff_ts:
+            break
+        offset += 500
+    recent = [t for t in all_trades if int(t.get("timestamp", 0)) >= cutoff_ts]
+    log(f"Feed global: {len(recent)} trades en la ventana")
+    return recent
 
 
 def send_telegram(text):
@@ -112,7 +124,7 @@ def send_telegram(text):
         log(f"Telegram excepción: {e}")
 
 
-def format_alert(trade, trader_name):
+def format_alert(trade, tag, trader_name, wallet):
     side = "🟢 COMPRA" if str(trade.get("side", "")).upper() == "BUY" else "🔴 VENTA"
     size = float(trade.get("size", 0))
     price = float(trade.get("price", 0))
@@ -121,18 +133,19 @@ def format_alert(trade, trader_name):
     title = trade.get("title", "Mercado desconocido")
     event_slug = trade.get("eventSlug") or trade.get("slug") or ""
     link = f"https://polymarket.com/event/{event_slug}" if event_slug else "https://polymarket.com"
+    profile = f"https://polymarket.com/profile/{wallet}" if wallet else ""
     ts = datetime.fromtimestamp(int(trade.get("timestamp", 0)), tz=timezone.utc).strftime("%H:%M UTC")
-    prob = f"{price*100:.0f}%"
-    return (
-        f"⚽ <b>ALERTA POLYMARKET</b>\n\n"
-        f"👤 Trader: <b>{trader_name}</b>\n"
+    msg = (
+        f"{tag}\n\n"
+        f"👤 <a href='{profile}'>{trader_name}</a>\n"
         f"{side} <b>{outcome}</b>\n"
         f"📊 {title}\n\n"
         f"💵 Monto: <b>${usd:,.0f}</b>\n"
-        f"🎯 Precio: {price:.2f} (prob. implícita {prob})\n"
+        f"🎯 Precio: {price:.2f} (prob. implícita {price*100:.0f}%)\n"
         f"🕐 {ts}\n"
         f"🔗 <a href='{link}'>Ver mercado</a>"
     )
+    return msg
 
 
 def main():
@@ -141,35 +154,40 @@ def main():
         sys.exit(1)
 
     cutoff_ts = int(time.time()) - WINDOW_MINUTES * 60
+
     traders = get_top_traders()
     for w in WALLETS_EXTRA:
-        traders.setdefault(w, f"Manual {w[:8]}")
-
-    if not traders:
-        log("Sin traders para monitorear.")
-        return
+        traders.setdefault(w, f"Seguido {w[:8]}")
 
     soccer_slugs, soccer_condition_ids = get_soccer_market_slugs()
+    trades = get_global_trades(cutoff_ts)
 
     alerts, seen = 0, set()
-    for wallet, name in traders.items():
-        for trade in get_recent_trades(wallet, cutoff_ts):
-            tx = trade.get("transactionHash") or f"{wallet}-{trade.get('timestamp')}-{trade.get('asset')}"
-            if tx in seen:
-                continue
-            seen.add(tx)
-            usd = float(trade.get("size", 0)) * float(trade.get("price", 0))
-            if usd < MIN_USD:
-                continue
-            if not is_soccer_trade(trade, soccer_slugs, soccer_condition_ids):
-                continue
-            trader_name = trade.get("pseudonym") or trade.get("name") or name
-            send_telegram(format_alert(trade, trader_name))
-            alerts += 1
-            time.sleep(1)
-        time.sleep(0.3)
+    for trade in trades:
+        tx = trade.get("transactionHash") or f"{trade.get('timestamp')}-{trade.get('asset')}-{trade.get('proxyWallet')}"
+        if tx in seen:
+            continue
+        seen.add(tx)
 
-    log(f"Listo. {alerts} alertas enviadas de {len(traders)} traders.")
+        if not is_soccer_trade(trade, soccer_slugs, soccer_condition_ids):
+            continue
+
+        usd = float(trade.get("size", 0)) * float(trade.get("price", 0))
+        wallet = (trade.get("proxyWallet") or "").lower()
+        trader_name = trade.get("pseudonym") or trade.get("name") or (traders.get(wallet) or wallet[:8])
+
+        if wallet in traders and usd >= MIN_USD:
+            tag = "⭐ <b>TOP TRADER APUESTA FÚTBOL</b>"
+        elif usd >= WHALE_USD:
+            tag = "🐋 <b>BALLENA EN FÚTBOL</b>"
+        else:
+            continue
+
+        send_telegram(format_alert(trade, tag, trader_name, wallet))
+        alerts += 1
+        time.sleep(1)
+
+    log(f"Listo. {alerts} alertas enviadas.")
 
 
 if __name__ == "__main__":
