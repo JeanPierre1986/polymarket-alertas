@@ -1,4 +1,4 @@
-name: Monitor Polymarket Fútbol
+name: Monitor Polymarket Deportes
 
 on:
   schedule:
@@ -8,7 +8,7 @@ on:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
@@ -26,6 +26,6 @@ jobs:
           WALLETS_EXTRA: ${{ secrets.WALLETS_EXTRA }}
           TOP_N: "50"
           LEADERBOARD_WINDOW: "30d"
-          MIN_USD: "50"
-          WINDOW_MINUTES: "11"
+          MIN_USD: "500"
+          WINDOW_MINUTES: "10"
         run: python monitor.py
