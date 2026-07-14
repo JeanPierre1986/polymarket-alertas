@@ -24,9 +24,9 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           WALLETS_EXTRA: ${{ secrets.WALLETS_EXTRA }}
-          TOP_N: "1000"
-          WHALE_USD: "10"
+          TOP_N: "300"
+          WHALE_USD: "500"
           LEADERBOARD_WINDOW: "30d"
-          MIN_USD: "10"
+          MIN_USD: "100"
           WINDOW_MINUTES: "5"
         run: python monitor.py
