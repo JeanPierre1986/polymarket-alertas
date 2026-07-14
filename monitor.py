@@ -1,5 +1,5 @@
 """
-Monitor Polymarket Fútbol v2 → Telegram
+Monitor Polymarket Fútbol v2.1 → Telegram
 Vigila el feed global de trades: alerta ballenas en fútbol (>= WHALE_USD)
 y trades de top traders del leaderboard (>= MIN_USD).
 """
@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 WALLETS_EXTRA = [w.strip().lower() for w in os.environ.get("WALLETS_EXTRA", "").split(",") if w.strip()]
-TOP_N = int(os.environ.get("TOP_N", "100"))
+TOP_N = int(os.environ.get("TOP_N", "50"))
 LEADERBOARD_WINDOW = os.environ.get("LEADERBOARD_WINDOW", "30d")
 MIN_USD = float(os.environ.get("MIN_USD", "500"))
 WHALE_USD = float(os.environ.get("WHALE_USD", "2000"))
@@ -22,7 +22,7 @@ WINDOW_MINUTES = int(os.environ.get("WINDOW_MINUTES", "6"))
 LB_API = "https://lb-api.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
 GAMMA_API = "https://gamma-api.polymarket.com"
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; futbol-monitor/2.0)"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; futbol-monitor/2.1)"}
 
 SOCCER_KEYWORDS = [
     "soccer", "premier league", "epl", "la liga", "laliga", "serie a",
@@ -36,6 +36,17 @@ SOCCER_KEYWORDS = [
 
 def log(msg):
     print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def normalize_ts(raw):
+    """Normaliza timestamps que pueden venir en segundos, milisegundos o texto."""
+    try:
+        ts = float(raw)
+    except (TypeError, ValueError):
+        return 0
+    if ts > 1e12:  # milisegundos
+        ts = ts / 1000
+    return int(ts)
 
 
 def safe_get(url, params=None, timeout=25):
@@ -100,11 +111,16 @@ def get_global_trades(cutoff_ts):
         if not isinstance(batch, list) or not batch:
             break
         all_trades.extend(batch)
-        oldest = min(int(t.get("timestamp", 0)) for t in batch)
+        oldest = min(normalize_ts(t.get("timestamp")) for t in batch)
         if oldest < cutoff_ts:
             break
         offset += 500
-    recent = [t for t in all_trades if int(t.get("timestamp", 0)) >= cutoff_ts]
+    if all_trades:
+        newest = max(normalize_ts(t.get("timestamp")) for t in all_trades)
+        log(f"Feed crudo: {len(all_trades)} trades, más reciente hace {int(time.time()) - newest}s")
+    else:
+        log("Feed crudo: vacío — el endpoint no devolvió datos")
+    recent = [t for t in all_trades if normalize_ts(t.get("timestamp")) >= cutoff_ts]
     log(f"Feed global: {len(recent)} trades en la ventana")
     return recent
 
@@ -134,8 +150,8 @@ def format_alert(trade, tag, trader_name, wallet):
     event_slug = trade.get("eventSlug") or trade.get("slug") or ""
     link = f"https://polymarket.com/event/{event_slug}" if event_slug else "https://polymarket.com"
     profile = f"https://polymarket.com/profile/{wallet}" if wallet else ""
-    ts = datetime.fromtimestamp(int(trade.get("timestamp", 0)), tz=timezone.utc).strftime("%H:%M UTC")
-    msg = (
+    ts = datetime.fromtimestamp(normalize_ts(trade.get("timestamp")), tz=timezone.utc).strftime("%H:%M UTC")
+    return (
         f"{tag}\n\n"
         f"👤 <a href='{profile}'>{trader_name}</a>\n"
         f"{side} <b>{outcome}</b>\n"
@@ -145,7 +161,6 @@ def format_alert(trade, tag, trader_name, wallet):
         f"🕐 {ts}\n"
         f"🔗 <a href='{link}'>Ver mercado</a>"
     )
-    return msg
 
 
 def main():
