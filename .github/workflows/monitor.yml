@@ -28,5 +28,5 @@ jobs:
           WHALE_USD: "2000"
           LEADERBOARD_WINDOW: "30d"
           MIN_USD: "250"
-          WINDOW_MINUTES: "2"
+          WINDOW_MINUTES: "5"
         run: python monitor.py
