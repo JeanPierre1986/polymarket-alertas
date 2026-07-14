@@ -1,6 +1,6 @@
 """
 Monitor Polymarket Deportes v3 → Telegram
-Vigila las wallets del TOP 20 del leaderboard y alerta cualquier
+Vigila las wallets del TOP 50 del leaderboard y alerta cualquier
 apuesta deportiva que hagan (todos los deportes).
 """
 
@@ -15,8 +15,8 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 WALLETS_EXTRA = [w.strip().lower() for w in os.environ.get("WALLETS_EXTRA", "").split(",") if w.strip()]
 TOP_N = int(os.environ.get("TOP_N", "50"))
 LEADERBOARD_WINDOW = os.environ.get("LEADERBOARD_WINDOW", "30d")
-MIN_USD = float(os.environ.get("MIN_USD", "20"))
-WINDOW_MINUTES = int(os.environ.get("WINDOW_MINUTES", "5"))
+MIN_USD = float(os.environ.get("MIN_USD", "500"))
+WINDOW_MINUTES = int(os.environ.get("WINDOW_MINUTES", "10"))
 
 LB_API = "https://lb-api.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
