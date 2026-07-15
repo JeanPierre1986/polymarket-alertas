@@ -1,6 +1,6 @@
 """
 Monitor Polymarket Deportes v4 → Telegram
-Vigila los TOP 10 traders y alerta apuestas deportivas >= $500.
+Vigila los TOP 10 traders y alerta apuestas deportivas >= $100.
 """
 
 import os
@@ -14,7 +14,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 WALLETS_EXTRA = [w.strip().lower() for w in os.environ.get("WALLETS_EXTRA", "").split(",") if w.strip()]
 TOP_N = int(os.environ.get("TOP_N", "10"))
 LEADERBOARD_WINDOW = os.environ.get("LEADERBOARD_WINDOW", "30d")
-MIN_USD = float(os.environ.get("MIN_USD", "500"))
+MIN_USD = float(os.environ.get("MIN_USD", "100"))
 WINDOW_MINUTES = int(os.environ.get("WINDOW_MINUTES", "10"))
 
 LB_API = "https://lb-api.polymarket.com"
