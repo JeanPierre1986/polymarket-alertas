@@ -24,7 +24,7 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           WALLETS_EXTRA: ${{ secrets.WALLETS_EXTRA }}
-          TOP_N: "50"
+          TOP_N: "10"
           LEADERBOARD_WINDOW: "30d"
           MIN_USD: "500"
           WINDOW_MINUTES: "4"
