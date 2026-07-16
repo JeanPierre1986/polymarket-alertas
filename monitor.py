@@ -6,6 +6,7 @@ Vigila los TOP 50 traders y alerta apuestas deportivas >= 500.
 import os
 import sys
 import time
+import re
 import requests
 from datetime import datetime, timezone
 
@@ -129,6 +130,35 @@ def send_telegram(text):
         log(f"Telegram excepción: {e}")
 
 
+def lado_apostado(outcome, title):
+    """Devuelve el lado real apostado, con la línea cuando aplica.
+    - Spread/hándicap: combina el equipo con la línea firmada (invierte el signo
+      si se compró al que NO es favorito). Ej: 'Philadelphia Phillies +1.5'.
+    - Totales O/U: 'Más de 2.5 (Over)' / 'Menos de 2.5 (Under)'.
+    - BTTS: 'Ambos anotan: Sí/No'.
+    - Moneyline/ganador: devuelve el outcome tal cual (ya es el equipo).
+    """
+    outcome = (outcome or "").strip()
+    title = (title or "").strip()
+
+    m = re.match(r"^\s*Spread:\s*(.+?)\s*\(([+-]?\d+(?:\.\d+)?)\)", title, re.I)
+    if m:
+        favorito = m.group(1).strip()
+        linea = float(m.group(2))
+        firmada = linea if outcome.lower() == favorito.lower() else -linea
+        return f"{outcome} {firmada:+g}"
+
+    m = re.search(r"(?:O/U|Over/Under)\s*([\d.]+)", title, re.I)
+    if m and outcome.lower() in ("over", "under"):
+        trad = "Más de" if outcome.lower() == "over" else "Menos de"
+        return f"{trad} {m.group(1)} ({outcome})"
+
+    if "both teams to score" in title.lower() and outcome.lower() in ("yes", "no"):
+        return "Ambos anotan: Sí" if outcome.lower() == "yes" else "Ambos anotan: No"
+
+    return outcome
+
+
 def format_alert(trade, trader_name, wallet, rank):
     side = "🟢 COMPRA" if str(trade.get("side", "")).upper() == "BUY" else "🔴 VENTA"
     size = float(trade.get("size", 0))
@@ -136,6 +166,7 @@ def format_alert(trade, trader_name, wallet, rank):
     usd = size * price
     outcome = trade.get("outcome", "?")
     title = trade.get("title", "Mercado desconocido")
+    lado = lado_apostado(outcome, title)
     event_slug = trade.get("eventSlug") or trade.get("slug") or ""
     link = f"https://polymarket.com/event/{event_slug}" if event_slug else "https://polymarket.com"
     profile = f"https://polymarket.com/profile/{wallet}" if wallet else ""
@@ -143,7 +174,7 @@ def format_alert(trade, trader_name, wallet, rank):
     return (
         f"⭐ <b>TOP {rank} APUESTA EN DEPORTES</b>\n\n"
         f"👤 <a href='{profile}'>{trader_name}</a>\n"
-        f"{side} <b>{outcome}</b>\n"
+        f"{side} <b>{lado}</b>\n"
         f"📊 {title}\n\n"
         f"💵 Monto: <b>${usd:,.0f}</b>\n"
         f"🎯 Precio: {price:.2f} (prob. implícita {price*100:.0f}%)\n"
