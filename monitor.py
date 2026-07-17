@@ -1,7 +1,7 @@
 """
-Monitor Polymarket Deportes v4 → Telegram
-Vigila los TOP 50 traders y alerta apuestas deportivas >= $500.
-Corre cada 3 minutos en GitHub Actions.
+Monitor Polymarket Deportes v4.1 → Telegram
+Vigila los TOP 50 traders y alerta apuestas deportivas >= MIN_USD.
+Con debug para ver qué está pasando.
 """
 
 import os
@@ -21,7 +21,7 @@ WINDOW_MINUTES = int(os.environ.get("WINDOW_MINUTES", "4"))
 LB_API = "https://lb-api.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
 GAMMA_API = "https://gamma-api.polymarket.com"
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; sports-monitor/4.0)"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; sports-monitor/4.1)"}
 
 SPORT_TAGS = ["sports", "soccer", "football", "nba", "nfl", "mlb", "nhl",
               "tennis", "ufc", "mma", "boxing", "golf", "f1", "cricket", "esports"]
@@ -137,4 +137,70 @@ def format_alert(trade, trader_name, wallet, rank):
     usd = size * price
     outcome = trade.get("outcome", "?")
     title = trade.get("title", "Mercado desconocido")
-    event_slug = trade.get("eventSlug") or trad
+    event_slug = trade.get("eventSlug") or trade.get("slug") or ""
+    link = f"https://polymarket.com/event/{event_slug}" if event_slug else "https://polymarket.com"
+    profile = f"https://polymarket.com/profile/{wallet}" if wallet else ""
+    ts = datetime.fromtimestamp(normalize_ts(trade.get("timestamp")), tz=timezone.utc).strftime("%H:%M UTC")
+    return (
+        f"⭐ <b>TOP {rank} APUESTA EN DEPORTES</b>\n\n"
+        f"👤 <a href='{profile}'>{trader_name}</a>\n"
+        f"{side} <b>{outcome}</b>\n"
+        f"📊 {title}\n\n"
+        f"💵 Monto: <b>${usd:,.0f}</b>\n"
+        f"🎯 Precio: {price:.2f} (prob. implícita {price*100:.0f}%)\n"
+        f"🕐 {ts}\n"
+        f"🔗 <a href='{link}'>Ver mercado</a>"
+    )
+
+
+def main():
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        log("ERROR: faltan TELEGRAM_TOKEN o TELEGRAM_CHAT_ID")
+        sys.exit(1)
+
+    log(f"CONFIG: TOP_N={TOP_N}, MIN_USD={MIN_USD}, WINDOW_MINUTES={WINDOW_MINUTES}")
+
+    cutoff_ts = int(time.time()) - WINDOW_MINUTES * 60
+    log(f"Buscando trades desde hace {WINDOW_MINUTES} minutos (timestamp >= {cutoff_ts})")
+
+    traders = get_top_traders()
+    for w in WALLETS_EXTRA:
+        if w not in traders:
+            traders[w] = (f"Seguido {w[:8]}", 0)
+
+    if not traders:
+        log("Sin traders para monitorear.")
+        return
+
+    sport_slugs, sport_condition_ids = get_sport_market_ids()
+
+    alerts, seen, trades_revisados = 0, set(), 0
+    for wallet, (name, rank) in traders.items():
+        recent = get_recent_trades(wallet, cutoff_ts)
+        trades_revisados += len(recent)
+        
+        for trade in recent:
+            tx = trade.get("transactionHash") or f"{wallet}-{trade.get('timestamp')}-{trade.get('asset')}"
+            if tx in seen:
+                continue
+            seen.add(tx)
+
+            if not is_sport_trade(trade, sport_slugs, sport_condition_ids):
+                continue
+
+            usd = float(trade.get("size", 0)) * float(trade.get("price", 0))
+            if usd < MIN_USD:
+                continue
+
+            trader_name = trade.get("pseudonym") or trade.get("name") or name
+            send_telegram(format_alert(trade, trader_name, wallet, rank))
+            alerts += 1
+            time.sleep(1)
+        time.sleep(0.3)
+
+    log(f"Listo. {alerts} alertas enviadas de {len(traders)} traders.")
+    log(f"DEBUG: Wallets revisadas={len(traders)}, trades totales vistos={len(seen)}, trades con deportes={trades_revisados}")
+
+
+if __name__ == "__main__":
+    main()
