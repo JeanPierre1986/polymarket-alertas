@@ -1,12 +1,12 @@
 """
 Monitor Polymarket Deportes v4 → Telegram
-Vigila los TOP 50 traders y alerta apuestas deportivas >= 500.
+Vigila los TOP 50 traders y alerta apuestas deportivas >= $500.
+Corre cada 3 minutos en GitHub Actions.
 """
 
 import os
 import sys
 import time
-import re
 import requests
 from datetime import datetime, timezone
 
@@ -16,7 +16,7 @@ WALLETS_EXTRA = [w.strip().lower() for w in os.environ.get("WALLETS_EXTRA", "").
 TOP_N = int(os.environ.get("TOP_N", "50"))
 LEADERBOARD_WINDOW = os.environ.get("LEADERBOARD_WINDOW", "30d")
 MIN_USD = float(os.environ.get("MIN_USD", "500"))
-WINDOW_MINUTES = int(os.environ.get("WINDOW_MINUTES", "10"))
+WINDOW_MINUTES = int(os.environ.get("WINDOW_MINUTES", "4"))
 
 LB_API = "https://lb-api.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
@@ -24,7 +24,7 @@ GAMMA_API = "https://gamma-api.polymarket.com"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; sports-monitor/4.0)"}
 
 SPORT_TAGS = ["sports", "soccer", "football", "nba", "nfl", "mlb", "nhl",
-              "tennis", "ufc", "mma", "boxing", "golf", "f1", "cricket"]
+              "tennis", "ufc", "mma", "boxing", "golf", "f1", "cricket", "esports"]
 
 SPORT_KEYWORDS = [
     "soccer", "premier league", "epl", "la liga", "laliga", "serie a",
@@ -130,35 +130,6 @@ def send_telegram(text):
         log(f"Telegram excepción: {e}")
 
 
-def lado_apostado(outcome, title):
-    """Devuelve el lado real apostado, con la línea cuando aplica.
-    - Spread/hándicap: combina el equipo con la línea firmada (invierte el signo
-      si se compró al que NO es favorito). Ej: 'Philadelphia Phillies +1.5'.
-    - Totales O/U: 'Más de 2.5 (Over)' / 'Menos de 2.5 (Under)'.
-    - BTTS: 'Ambos anotan: Sí/No'.
-    - Moneyline/ganador: devuelve el outcome tal cual (ya es el equipo).
-    """
-    outcome = (outcome or "").strip()
-    title = (title or "").strip()
-
-    m = re.match(r"^\s*Spread:\s*(.+?)\s*\(([+-]?\d+(?:\.\d+)?)\)", title, re.I)
-    if m:
-        favorito = m.group(1).strip()
-        linea = float(m.group(2))
-        firmada = linea if outcome.lower() == favorito.lower() else -linea
-        return f"{outcome} {firmada:+g}"
-
-    m = re.search(r"(?:O/U|Over/Under)\s*([\d.]+)", title, re.I)
-    if m and outcome.lower() in ("over", "under"):
-        trad = "Más de" if outcome.lower() == "over" else "Menos de"
-        return f"{trad} {m.group(1)} ({outcome})"
-
-    if "both teams to score" in title.lower() and outcome.lower() in ("yes", "no"):
-        return "Ambos anotan: Sí" if outcome.lower() == "yes" else "Ambos anotan: No"
-
-    return outcome
-
-
 def format_alert(trade, trader_name, wallet, rank):
     side = "🟢 COMPRA" if str(trade.get("side", "")).upper() == "BUY" else "🔴 VENTA"
     size = float(trade.get("size", 0))
@@ -166,65 +137,4 @@ def format_alert(trade, trader_name, wallet, rank):
     usd = size * price
     outcome = trade.get("outcome", "?")
     title = trade.get("title", "Mercado desconocido")
-    lado = lado_apostado(outcome, title)
-    event_slug = trade.get("eventSlug") or trade.get("slug") or ""
-    link = f"https://polymarket.com/event/{event_slug}" if event_slug else "https://polymarket.com"
-    profile = f"https://polymarket.com/profile/{wallet}" if wallet else ""
-    ts = datetime.fromtimestamp(normalize_ts(trade.get("timestamp")), tz=timezone.utc).strftime("%H:%M UTC")
-    return (
-        f"⭐ <b>TOP {rank} APUESTA EN DEPORTES</b>\n\n"
-        f"👤 <a href='{profile}'>{trader_name}</a>\n"
-        f"{side} <b>{lado}</b>\n"
-        f"📊 {title}\n\n"
-        f"💵 Monto: <b>${usd:,.0f}</b>\n"
-        f"🎯 Precio: {price:.2f} (prob. implícita {price*100:.0f}%)\n"
-        f"🕐 {ts}\n"
-        f"🔗 <a href='{link}'>Ver mercado</a>"
-    )
-
-
-def main():
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        log("ERROR: faltan TELEGRAM_TOKEN o TELEGRAM_CHAT_ID")
-        sys.exit(1)
-
-    cutoff_ts = int(time.time()) - WINDOW_MINUTES * 60
-
-    traders = get_top_traders()
-    for w in WALLETS_EXTRA:
-        if w not in traders:
-            traders[w] = (f"Seguido {w[:8]}", 0)
-
-    if not traders:
-        log("Sin traders para monitorear.")
-        return
-
-    sport_slugs, sport_condition_ids = get_sport_market_ids()
-
-    alerts, seen = 0, set()
-    for wallet, (name, rank) in traders.items():
-        recent = get_recent_trades(wallet, cutoff_ts)
-        for trade in recent:
-            tx = trade.get("transactionHash") or f"{wallet}-{trade.get('timestamp')}-{trade.get('asset')}"
-            if tx in seen:
-                continue
-            seen.add(tx)
-
-            if not is_sport_trade(trade, sport_slugs, sport_condition_ids):
-                continue
-
-            usd = float(trade.get("size", 0)) * float(trade.get("price", 0))
-            if usd < MIN_USD:
-                continue
-
-            trader_name = trade.get("pseudonym") or trade.get("name") or name
-            send_telegram(format_alert(trade, trader_name, wallet, rank))
-            alerts += 1
-            time.sleep(1)
-        time.sleep(0.3)
-
-    log(f"Listo. {alerts} alertas enviadas de {len(traders)} traders.")
-
-
-if __name__ == "__main__":
-    main()
+    event_slug = trade.get("eventSlug") or trad
