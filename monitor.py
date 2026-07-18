@@ -1,12 +1,13 @@
 """
-Monitor Polymarket Deportes v4.2 → Telegram
+Monitor Polymarket Deportes v4.3 → Telegram
 Vigila los TOP 50 traders y alerta apuestas deportivas >= $500.
-Con clasificacion de tipo de mercado.
+Con detalle de tipo de O/U (Goles, Corners, Puntos, etc).
 """
 
 import os
 import sys
 import time
+import re
 import requests
 from datetime import datetime, timezone
 
@@ -21,7 +22,7 @@ WINDOW_MINUTES = int(os.environ.get("WINDOW_MINUTES", "4"))
 LB_API = "https://lb-api.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
 GAMMA_API = "https://gamma-api.polymarket.com"
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; sports-monitor/4.2)"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; sports-monitor/4.3)"}
 
 SPORT_TAGS = ["sports", "soccer", "football", "nba", "nfl", "mlb", "nhl", "tennis", "ufc", "mma", "boxing", "golf", "f1", "cricket", "esports"]
 
@@ -126,20 +127,40 @@ def format_alert(trade, trader_name, wallet, rank):
     title_lower = title.lower()
     outcome_lower = outcome.lower()
     
+    market_type = "Mercado"
+    
     if "o/u" in title_lower or "over" in outcome_lower or "under" in outcome_lower:
-        market_type = "Over/Under"
+        if "corner" in title_lower:
+            ou_type = "Corners"
+        elif "gol" in title_lower or "goal" in title_lower or ("vs" in title_lower and "o/u" in title_lower and "corner" not in title_lower):
+            ou_type = "Goles"
+        elif "point" in title_lower or "run" in title_lower or "score" in title_lower:
+            ou_type = "Puntos"
+        elif "card" in title_lower or "tarjeta" in title_lower:
+            ou_type = "Tarjetas"
+        else:
+            ou_type = "Totales"
+        
+        match = re.search(r'O/U\s*([\d.]+)', title, re.IGNORECASE)
+        if match:
+            market_type = f"{outcome} ({ou_type} {match.group(1)})"
+        else:
+            market_type = f"{outcome} ({ou_type})"
+            
     elif "moneyline" in title_lower or ("to win" in title_lower and "vs" in title_lower):
         market_type = "Moneyline"
     elif "spread" in title_lower:
-        market_type = "Spread"
+        match = re.search(r'([\+\-]\d+\.?\d*)', title)
+        if match:
+            market_type = f"Spread {match.group(1)}"
+        else:
+            market_type = "Spread"
     elif "gol" in title_lower or "goal" in title_lower:
         market_type = "Goles"
     elif "corner" in title_lower:
         market_type = "Corners"
     elif "tarjeta" in title_lower or "card" in title_lower:
         market_type = "Tarjetas"
-    else:
-        market_type = "Mercado"
     
     return (
         f"TOP {rank} - {trader_name}\n"
