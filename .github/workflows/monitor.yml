@@ -5,6 +5,10 @@ on:
     - cron: "*/3 * * * *"
   workflow_dispatch:
 
+concurrency:
+  group: polymarket-monitor
+  cancel-in-progress: false
+
 jobs:
   monitor:
     runs-on: ubuntu-latest
@@ -19,6 +23,16 @@ jobs:
       - name: Instalar dependencias
         run: pip install requests
 
+      - name: Restaurar estado (cache + seen)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            sport_cache.json
+            seen_trades.json
+          key: polymarket-state-${{ github.run_id }}
+          restore-keys: |
+            polymarket-state-
+
       - name: Ejecutar monitor
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
@@ -29,3 +43,12 @@ jobs:
           MIN_USD: "500"
           WINDOW_MINUTES: "4"
         run: python monitor.py
+
+      - name: Guardar estado
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            sport_cache.json
+            seen_trades.json
+          key: polymarket-state-${{ github.run_id }}
