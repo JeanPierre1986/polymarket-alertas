@@ -1,28 +1,47 @@
 """
-Monitor Polymarket Deportes v4.3 → Telegram
-Vigila los TOP 80 traders y alerta apuestas deportivas >= $500.
+Monitor Polymarket Deportes v5.0 -> Telegram
+Vigila el TOP N traders de la categoria SPORTS y alerta apuestas deportivas >= $500.
 Con detalle de tipo de O/U (Goles, Corners, Puntos, etc).
+
+Cambios v5.0:
+- Migrado de lb-api.polymarket.com (viejo/deprecado) a data-api.polymarket.com/v1/leaderboard (oficial)
+- El endpoint oficial tope 50 traders por request -> se pagina con offset para juntar TOP_N > 50
+- Se usa category=SPORTS directamente en el leaderboard (antes se traia el TOP overall y se filtraba despues)
+- Cache en disco de los mercados deportivos activos (evita golpear Gamma API en cada corrida)
+- Persistencia en disco de trades ya alertados (evita alertas duplicadas entre corridas del cron)
 """
 
 import os
 import sys
 import time
 import re
+import json
 import requests
 from datetime import datetime, timezone
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 WALLETS_EXTRA = [w.strip().lower() for w in os.environ.get("WALLETS_EXTRA", "").split(",") if w.strip()]
-TOP_N = int(os.environ.get("TOP_N", "80"))
-LEADERBOARD_WINDOW = os.environ.get("LEADERBOARD_WINDOW", "30d")
-MIN_USD = float(os.environ.get("MIN_USD", "500"))
+TOP_N = int(os.environ.get("TOP_N", "50"))
+LEADERBOARD_WINDOW = os.environ.get("LEADERBOARD_WINDOW", "30d")  # 1d/7d/30d/all (se mapea abajo)
+MIN_USD = float(os.environ.get("MIN_USD", "1000"))
 WINDOW_MINUTES = int(os.environ.get("WINDOW_MINUTES", "4"))
+MIN_PRICE = float(os.environ.get("MIN_PRICE", "0.60"))  # probabilidad minima (60%)
+MAX_PRICE = float(os.environ.get("MAX_PRICE", "0.80"))  # probabilidad maxima (80%)
 
-LB_API = "https://lb-api.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
 GAMMA_API = "https://gamma-api.polymarket.com"
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; sports-monitor/4.3)"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; sports-monitor/5.0)"}
+
+LEADERBOARD_MAX_PER_CALL = 50  # limite duro del endpoint oficial
+
+# Cache de mercados deportivos: se refresca solo si pasaron mas de N minutos
+SPORT_CACHE_FILE = os.environ.get("SPORT_CACHE_FILE", "sport_cache.json")
+SPORT_CACHE_TTL_MIN = int(os.environ.get("SPORT_CACHE_TTL_MIN", "30"))
+
+# Persistencia de trades ya notificados (evita duplicados entre corridas)
+SEEN_FILE = os.environ.get("SEEN_FILE", "seen_trades.json")
+SEEN_RETENTION_MIN = max(WINDOW_MINUTES * 3, 30)  # cuanto guardamos hashes viejos
 
 SPORT_TAGS = ["sports", "soccer", "football", "nba", "nfl", "mlb", "nhl", "tennis", "ufc", "mma", "boxing", "golf", "f1", "cricket", "esports"]
 
@@ -43,33 +62,102 @@ def normalize_ts(raw):
     return int(ts)
 
 
-def safe_get(url, params=None, timeout=25):
-    try:
-        r = requests.get(url, params=params, headers=HEADERS, timeout=timeout)
-        if r.status_code == 200:
-            return r.json()
-        log(f"HTTP {r.status_code} en {url}")
-    except Exception as e:
-        log(f"Error en {url}: {e}")
+def safe_get(url, params=None, timeout=25, retries=2):
+    for attempt in range(retries + 1):
+        try:
+            r = requests.get(url, params=params, headers=HEADERS, timeout=timeout)
+            if r.status_code == 200:
+                return r.json()
+            if r.status_code == 429:
+                wait = 2 * (attempt + 1)
+                log(f"429 rate-limit en {url}, esperando {wait}s")
+                time.sleep(wait)
+                continue
+            log(f"HTTP {r.status_code} en {url}")
+            return None
+        except Exception as e:
+            log(f"Error en {url}: {e}")
+            if attempt < retries:
+                time.sleep(1.5)
     return None
 
 
+def _map_window_to_period(window):
+    w = (window or "").strip().lower()
+    if w in ("1d", "day", "today"):
+        return "DAY"
+    if w in ("7d", "week"):
+        return "WEEK"
+    if w in ("30d", "month"):
+        return "MONTH"
+    return "ALL"
+
+
 def get_top_traders():
+    """Trae el TOP_N de la categoria SPORTS paginando de a 50 (limite del endpoint oficial)."""
     traders = {}
-    data = safe_get(f"{LB_API}/profit", params={"window": LEADERBOARD_WINDOW, "limit": TOP_N})
-    if not data:
-        data = safe_get(f"{LB_API}/leaderboard", params={"window": LEADERBOARD_WINDOW, "limit": TOP_N, "rankType": "profit"})
-    if isinstance(data, list):
-        for i, t in enumerate(data[:TOP_N]):
-            wallet = (t.get("proxyWallet") or t.get("wallet") or t.get("address") or "").lower()
-            name = t.get("name") or t.get("pseudonym") or wallet[:8]
-            if wallet:
-                traders[wallet] = (name, i + 1)
-    log(f"Leaderboard: {len(traders)} traders obtenidos")
+    period = _map_window_to_period(LEADERBOARD_WINDOW)
+    offset = 0
+    rank_counter = 0
+
+    while len(traders) < TOP_N:
+        limit = min(LEADERBOARD_MAX_PER_CALL, TOP_N - len(traders))
+        data = safe_get(
+            f"{DATA_API}/v1/leaderboard",
+            params={
+                "category": "SPORTS",
+                "timePeriod": period,
+                "orderBy": "PNL",
+                "limit": limit,
+                "offset": offset,
+            },
+        )
+        if not isinstance(data, list) or not data:
+            break
+
+        for t in data:
+            wallet = (t.get("proxyWallet") or "").lower()
+            name = t.get("userName") or (wallet[:8] if wallet else "?")
+            if wallet and wallet not in traders:
+                rank_counter += 1
+                traders[wallet] = (name, rank_counter)
+
+        if len(data) < limit:
+            break  # ya no hay mas paginas
+        offset += limit
+
+    log(f"Leaderboard SPORTS ({period}): {len(traders)} traders obtenidos")
     return traders
 
 
+def _load_json_file(path, default):
+    try:
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                return json.load(f)
+    except Exception as e:
+        log(f"No se pudo leer {path}: {e}")
+    return default
+
+
+def _save_json_file(path, data):
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        log(f"No se pudo guardar {path}: {e}")
+
+
 def get_sport_market_ids():
+    """Cachea en disco los mercados deportivos activos para no golpear Gamma API en cada corrida."""
+    cache = _load_json_file(SPORT_CACHE_FILE, {})
+    now = int(time.time())
+    cached_at = cache.get("cached_at", 0)
+
+    if cache.get("slugs") is not None and (now - cached_at) < SPORT_CACHE_TTL_MIN * 60:
+        log(f"Mercados deportivos: usando cache ({len(cache['slugs'])} eventos, edad {(now - cached_at)//60}min)")
+        return set(cache["slugs"]), set(cache["condition_ids"])
+
     slugs, condition_ids = set(), set()
     for tag in SPORT_TAGS:
         data = safe_get(f"{GAMMA_API}/events", params={"tag_slug": tag, "active": "true", "closed": "false", "limit": 200})
@@ -80,7 +168,13 @@ def get_sport_market_ids():
                 for m in ev.get("markets", []) or []:
                     if m.get("conditionId"):
                         condition_ids.add(m["conditionId"].lower())
-    log(f"Deportes activos: {len(slugs)} eventos, {len(condition_ids)} mercados")
+
+    _save_json_file(SPORT_CACHE_FILE, {
+        "cached_at": now,
+        "slugs": list(slugs),
+        "condition_ids": list(condition_ids),
+    })
+    log(f"Deportes activos (refrescado): {len(slugs)} eventos, {len(condition_ids)} mercados")
     return slugs, condition_ids
 
 
@@ -102,6 +196,19 @@ def get_recent_trades(wallet, cutoff_ts):
     return [t for t in trades if normalize_ts(t.get("timestamp")) >= cutoff_ts]
 
 
+def load_seen(cutoff_ts):
+    """Carga hashes ya notificados y descarta los mas viejos que la ventana de retencion."""
+    raw = _load_json_file(SEEN_FILE, {})
+    retention_cutoff = int(time.time()) - SEEN_RETENTION_MIN * 60
+    pruned = {tx: ts for tx, ts in raw.items() if ts >= retention_cutoff}
+    log(f"Seen cargados: {len(pruned)} (de {len(raw)}, {len(raw)-len(pruned)} podados)")
+    return pruned
+
+
+def save_seen(seen_dict):
+    _save_json_file(SEEN_FILE, seen_dict)
+
+
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
@@ -112,7 +219,7 @@ def send_telegram(text):
         log(f"Telegram excepcion: {e}")
 
 
-def format_alert(trade, trader_name, wallet, rank):
+def format_alert(trade, trader_name, wallet, rank, effective_prob=None):
     side = "COMPRA" if str(trade.get("side", "")).upper() == "BUY" else "VENTA"
     size = float(trade.get("size", 0))
     price = float(trade.get("price", 0))
@@ -121,14 +228,14 @@ def format_alert(trade, trader_name, wallet, rank):
     title = trade.get("title", "Mercado desconocido")
     event_slug = trade.get("eventSlug") or trade.get("slug") or ""
     link = f"https://polymarket.com/event/{event_slug}" if event_slug else "https://polymarket.com"
-    profile = f"https://polymarket.com/profile/{wallet}" if wallet else ""
     ts = datetime.fromtimestamp(normalize_ts(trade.get("timestamp")), tz=timezone.utc).strftime("%H:%M UTC")
-    
+    prob_pct = (effective_prob if effective_prob is not None else price) * 100
+
     title_lower = title.lower()
     outcome_lower = outcome.lower()
-    
+
     market_type = "Mercado"
-    
+
     if "o/u" in title_lower or "over" in outcome_lower or "under" in outcome_lower:
         if "corner" in title_lower:
             ou_type = "Corners"
@@ -140,13 +247,13 @@ def format_alert(trade, trader_name, wallet, rank):
             ou_type = "Tarjetas"
         else:
             ou_type = "Totales"
-        
+
         match = re.search(r'O/U\s*([\d.]+)', title, re.IGNORECASE)
         if match:
             market_type = f"{outcome} ({ou_type} {match.group(1)})"
         else:
             market_type = f"{outcome} ({ou_type})"
-            
+
     elif "moneyline" in title_lower or ("to win" in title_lower and "vs" in title_lower):
         market_type = "Moneyline"
     elif "spread" in title_lower:
@@ -161,14 +268,14 @@ def format_alert(trade, trader_name, wallet, rank):
         market_type = "Corners"
     elif "tarjeta" in title_lower or "card" in title_lower:
         market_type = "Tarjetas"
-    
+
     return (
         f"TOP {rank} - {trader_name}\n"
         f"{side}: {outcome}\n"
         f"Tipo: {market_type}\n"
         f"{title}\n\n"
         f"Monto: ${usd:,.0f}\n"
-        f"Precio: {price:.2f} ({price*100:.0f}%)\n"
+        f"Probabilidad: {prob_pct:.0f}% (precio {price:.2f})\n"
         f"{ts}\n"
         f"Enlace: {link}"
     )
@@ -179,8 +286,9 @@ def main():
         log("ERROR: faltan TELEGRAM_TOKEN o TELEGRAM_CHAT_ID")
         sys.exit(1)
 
-    log(f"CONFIG: TOP_N={TOP_N}, MIN_USD={MIN_USD}, WINDOW_MINUTES={WINDOW_MINUTES}")
-    cutoff_ts = int(time.time()) - WINDOW_MINUTES * 60
+    log(f"CONFIG: TOP_N={TOP_N}, MIN_USD={MIN_USD}, WINDOW_MINUTES={WINDOW_MINUTES}, PRICE_RANGE=[{MIN_PRICE:.2f}-{MAX_PRICE:.2f}]")
+    now_ts = int(time.time())
+    cutoff_ts = now_ts - WINDOW_MINUTES * 60
 
     traders = get_top_traders()
     for w in WALLETS_EXTRA:
@@ -192,31 +300,42 @@ def main():
         return
 
     sport_slugs, sport_condition_ids = get_sport_market_ids()
+    seen = load_seen(cutoff_ts)
 
-    alerts, seen = 0, set()
+    alerts = 0
     for wallet, (name, rank) in traders.items():
         recent = get_recent_trades(wallet, cutoff_ts)
         for trade in recent:
             tx = trade.get("transactionHash") or f"{wallet}-{trade.get('timestamp')}-{trade.get('asset')}"
             if tx in seen:
                 continue
-            seen.add(tx)
 
             if not is_sport_trade(trade, sport_slugs, sport_condition_ids):
                 continue
 
-            usd = float(trade.get("size", 0)) * float(trade.get("price", 0))
+            price = float(trade.get("price", 0))
+            outcome_str = str(trade.get("outcome", "")).strip().lower()
+            # El "price" que devuelve la API es la probabilidad implicita del lado "Yes".
+            # Si el trader tomo "No", su probabilidad real de ganar es el complemento.
+            effective_prob = (1 - price) if outcome_str == "no" else price
+            if effective_prob < MIN_PRICE or effective_prob > MAX_PRICE:
+                continue
+
+            usd = float(trade.get("size", 0)) * price
             if usd < MIN_USD:
                 continue
 
             trader_name = trade.get("pseudonym") or trade.get("name") or name
-            send_telegram(format_alert(trade, trader_name, wallet, rank))
+            send_telegram(format_alert(trade, trader_name, wallet, rank, effective_prob))
+            seen[tx] = normalize_ts(trade.get("timestamp")) or now_ts
             alerts += 1
             time.sleep(1)
         time.sleep(0.3)
 
+    save_seen(seen)
     log(f"Listo. {alerts} alertas enviadas de {len(traders)} traders.")
 
 
 if __name__ == "__main__":
     main()
+    
