@@ -34,6 +34,8 @@ GAMMA_API = "https://gamma-api.polymarket.com"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; sports-monitor/5.0)"}
 
 LEADERBOARD_MAX_PER_CALL = 50  # limite duro del endpoint oficial
+TRADES_MAX_PER_CALL = 100      # limite del endpoint /trades por request
+TRADES_MAX_PAGES = 10          # tope de paginas para no quedar en loop con wallets muy activas
 
 # Cache de mercados deportivos: se refresca solo si pasaron mas de N minutos
 SPORT_CACHE_FILE = os.environ.get("SPORT_CACHE_FILE", "sport_cache.json")
@@ -45,7 +47,12 @@ SEEN_RETENTION_MIN = max(WINDOW_MINUTES * 3, 30)  # cuanto guardamos hashes viej
 
 SPORT_TAGS = ["sports", "soccer", "football", "nba", "nfl", "mlb", "nhl", "tennis", "ufc", "mma", "boxing", "golf", "f1", "cricket", "esports"]
 
-SPORT_KEYWORDS = ["soccer", "premier league", "epl", "la liga", "laliga", "serie a", "bundesliga", "ligue 1", "champions league", "ucl", "europa league", "world cup", "copa america", "copa libertadores", "fifa", "uefa", "mls", "liga mx", "fa cup", "golden boot", "top scorer", "nba", "nfl", "mlb", "nhl", "super bowl", "world series", "stanley cup", "finals", "playoffs", "grand slam", "wimbledon", "us open", "roland garros", "australian open", "ufc", "mma", "boxing", "heavyweight", "grand prix", "formula 1", "f1 ", "premier padel", "olympics", "ncaa", "march madness", "masters", "pga", "ryder cup", "cricket", "ipl", "rugby", "atp", "wta", " vs ", " vs. ", " @ "]
+# Nota: se quitaron " vs ", " vs. " y " @ " de este listado (v5.1) porque como fallback
+# generico generaban falsos positivos con mercados no deportivos que simplemente
+# comparan dos entidades (ej. elecciones, premios, corporativos). El match por
+# conditionId/eventSlug contra el cache de Gamma sigue siendo la via principal;
+# estas keywords son solo un respaldo cuando ese cache no cubre el mercado.
+SPORT_KEYWORDS = ["soccer", "premier league", "epl", "la liga", "laliga", "serie a", "bundesliga", "ligue 1", "champions league", "ucl", "europa league", "world cup", "copa america", "copa libertadores", "fifa", "uefa", "mls", "liga mx", "fa cup", "golden boot", "top scorer", "nba", "nfl", "mlb", "nhl", "super bowl", "world series", "stanley cup", "finals", "playoffs", "grand slam", "wimbledon", "us open", "roland garros", "australian open", "ufc", "mma", "boxing", "heavyweight", "grand prix", "formula 1", "f1 ", "premier padel", "olympics", "ncaa", "march madness", "masters", "pga", "ryder cup", "cricket", "ipl", "rugby", "atp", "wta"]
 
 
 def log(msg):
@@ -190,10 +197,35 @@ def is_sport_trade(trade, sport_slugs, sport_condition_ids):
 
 
 def get_recent_trades(wallet, cutoff_ts):
-    trades = safe_get(f"{DATA_API}/trades", params={"user": wallet, "limit": 100})
-    if not isinstance(trades, list):
-        return []
-    return [t for t in trades if normalize_ts(t.get("timestamp")) >= cutoff_ts]
+    """
+    Trae trades del wallet paginando con offset hasta cubrir toda la ventana
+    (antes se pedia un unico limit=100, y wallets muy activos podian perder
+    trades dentro de la ventana si superaban ese limite).
+    Se corta cuando la pagina ya no trae datos dentro de la ventana,
+    cuando la API devuelve menos del limite pedido (ultima pagina),
+    o al llegar a TRADES_MAX_PAGES como salvaguarda.
+    """
+    collected = []
+    offset = 0
+
+    for _ in range(TRADES_MAX_PAGES):
+        page = safe_get(
+            f"{DATA_API}/trades",
+            params={"user": wallet, "limit": TRADES_MAX_PER_CALL, "offset": offset},
+        )
+        if not isinstance(page, list) or not page:
+            break
+
+        in_window = [t for t in page if normalize_ts(t.get("timestamp")) >= cutoff_ts]
+        collected.extend(in_window)
+
+        oldest_ts = min((normalize_ts(t.get("timestamp")) for t in page), default=0)
+        if len(page) < TRADES_MAX_PER_CALL or oldest_ts < cutoff_ts:
+            break  # ultima pagina, o ya salimos de la ventana
+
+        offset += TRADES_MAX_PER_CALL
+
+    return collected
 
 
 def load_seen(cutoff_ts):
