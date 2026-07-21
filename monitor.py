@@ -1,7 +1,14 @@
 """
-Monitor Polymarket Deportes v5.0 -> Telegram
-Vigila el TOP N traders de la categoria SPORTS y alerta apuestas deportivas >= $500.
+Monitor Polymarket Deportes v5.1 -> Telegram
+Vigila el TOP N traders de la categoria SPORTS y alerta TODAS sus apuestas deportivas,
+sin filtro de monto minimo.
 Con detalle de tipo de O/U (Goles, Corners, Puntos, etc).
+
+Cambios v5.1:
+- TOP_N ahora default 10 (antes 50)
+- Se elimino el filtro por monto minimo (MIN_USD). Ahora se alertan TODAS las apuestas
+  deportivas de los traders monitoreados, sin importar el tamano.
+- Se sigue mostrando el monto ($) en la alerta, solo que ya no se usa para filtrar.
 
 Cambios v5.0:
 - Migrado de lb-api.polymarket.com (viejo/deprecado) a data-api.polymarket.com/v1/leaderboard (oficial)
@@ -22,16 +29,15 @@ from datetime import datetime, timezone
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 WALLETS_EXTRA = [w.strip().lower() for w in os.environ.get("WALLETS_EXTRA", "").split(",") if w.strip()]
-TOP_N = int(os.environ.get("TOP_N", "50"))
+TOP_N = int(os.environ.get("TOP_N", "10"))
 LEADERBOARD_WINDOW = os.environ.get("LEADERBOARD_WINDOW", "30d")  # 1d/7d/30d/all (se mapea abajo)
-MIN_USD = float(os.environ.get("MIN_USD", ",500"))
 WINDOW_MINUTES = int(os.environ.get("WINDOW_MINUTES", "4"))
 MIN_PRICE = float(os.environ.get("MIN_PRICE", "0.60"))  # probabilidad minima (60%)
 MAX_PRICE = float(os.environ.get("MAX_PRICE", "0.80"))  # probabilidad maxima (80%)
 
 DATA_API = "https://data-api.polymarket.com"
 GAMMA_API = "https://gamma-api.polymarket.com"
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; sports-monitor/5.0)"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; sports-monitor/5.1)"}
 
 LEADERBOARD_MAX_PER_CALL = 50  # limite duro del endpoint oficial
 TRADES_MAX_PER_CALL = 100      # limite del endpoint /trades por request
@@ -318,7 +324,7 @@ def main():
         log("ERROR: faltan TELEGRAM_TOKEN o TELEGRAM_CHAT_ID")
         sys.exit(1)
 
-    log(f"CONFIG: TOP_N={TOP_N}, MIN_USD={MIN_USD}, WINDOW_MINUTES={WINDOW_MINUTES}, PRICE_RANGE=[{MIN_PRICE:.2f}-{MAX_PRICE:.2f}]")
+    log(f"CONFIG: TOP_N={TOP_N}, WINDOW_MINUTES={WINDOW_MINUTES}, PRICE_RANGE=[{MIN_PRICE:.2f}-{MAX_PRICE:.2f}], sin filtro de monto")
     now_ts = int(time.time())
     cutoff_ts = now_ts - WINDOW_MINUTES * 60
 
@@ -353,9 +359,8 @@ def main():
             if effective_prob < MIN_PRICE or effective_prob > MAX_PRICE:
                 continue
 
-            usd = float(trade.get("size", 0)) * price
-            if usd < MIN_USD:
-                continue
+            # v5.1: ya no se filtra por monto minimo (MIN_USD eliminado).
+            # Se alertan todas las apuestas deportivas del TOP_N dentro del rango de probabilidad.
 
             trader_name = trade.get("pseudonym") or trade.get("name") or name
             send_telegram(format_alert(trade, trader_name, wallet, rank, effective_prob))
@@ -370,4 +375,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
