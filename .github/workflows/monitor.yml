@@ -40,7 +40,7 @@ jobs:
           WALLETS_EXTRA: ${{ secrets.WALLETS_EXTRA }}
           TOP_N: "50"
           LEADERBOARD_WINDOW: "7d"
-          MIN_USD: "1000"
+          MIN_USD: "500"
           WINDOW_MINUTES: "4"
         run: python monitor.py
 
