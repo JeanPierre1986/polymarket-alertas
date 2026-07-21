@@ -40,7 +40,7 @@ jobs:
           WALLETS_EXTRA: ${{ secrets.WALLETS_EXTRA }}
           TOP_N: "5"
           LEADERBOARD_WINDOW: "7d"
-          WINDOW_MINUTES: "4"
+          WINDOW_MINUTES: "6"
         run: python monitor.py
 
       - name: Guardar estado
@@ -51,3 +51,4 @@ jobs:
             sport_cache.json
             seen_trades.json
           key: polymarket-state-${{ github.run_id }}
+          
