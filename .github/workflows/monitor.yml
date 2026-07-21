@@ -2,7 +2,7 @@ name: Monitor Polymarket Deportes
 
 on:
   schedule:
-    - cron: "*/3 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -38,9 +38,8 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           WALLETS_EXTRA: ${{ secrets.WALLETS_EXTRA }}
-          TOP_N: "50"
+          TOP_N: "10"
           LEADERBOARD_WINDOW: "7d"
-          MIN_USD: "500"
           WINDOW_MINUTES: "4"
         run: python monitor.py
 
@@ -52,4 +51,3 @@ jobs:
             sport_cache.json
             seen_trades.json
           key: polymarket-state-${{ github.run_id }}
-          
