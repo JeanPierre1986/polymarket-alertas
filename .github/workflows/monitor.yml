@@ -41,7 +41,13 @@ jobs:
           TOP_N: "25"
           LEADERBOARD_WINDOW: "7d"
           WINDOW_MINUTES: "6"
-        run: python monitor.py
+          # --- nuevo en v6.0 ---
+          MIN_USD: "250"          # baja o sube segun cuanto ruido quieras filtrar
+          MIN_PRICE: "0"          # ej: "0.15" para ignorar mercados casi resueltos
+          MAX_PRICE: "1"          # ej: "0.85" idem del otro lado
+          RANK_BY_ROI: "false"    # dejar en false hasta confirmar el campo de volumen (ver debug_print_leaderboard_sample)
+          MIN_TRADES_FOR_RANK: "0"
+        run: python polymarket_sports_monitor_v6.py
 
       - name: Guardar estado
         if: always()
